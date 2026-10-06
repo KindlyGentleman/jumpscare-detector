@@ -21,12 +21,16 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=1.24.0",
+    "scipy>=1.10.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
 ]
+
+[project.scripts]
+jumpscare-detector = "jumpscare_detector.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
