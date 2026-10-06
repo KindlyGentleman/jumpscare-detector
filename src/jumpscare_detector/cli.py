@@ -193,11 +193,60 @@ def cmd_generate_sample(args: argparse.Namespace) -> None:
     print(f"Generated test sample saved to: {args.output} (Duration: {len(sample_audio) / sr:.1f}s, Shock at 3.5s)")
 
 
+def cmd_multimodal(args: argparse.Namespace) -> None:
+    """Run explainable multimodal jump scare detection across audio and video channels."""
+    from jumpscare_detector.multimodal import MultimodalConfig
+    from jumpscare_detector.pipeline import run_multimodal_pipeline
+    from jumpscare_detector.video import VideoConfig
+
+    print(f"Running multimodal transient analysis on: {args.input}")
+    if args.video:
+        print(f"Explicit video source: {args.video}")
+
+    multimodal_config = MultimodalConfig(
+        detection_threshold=args.threshold,
+        min_separation=args.min_separation,
+    )
+    video_config = VideoConfig(
+        scale_factor=args.scale_factor,
+    )
+
+    res = run_multimodal_pipeline(
+        media_path=args.input,
+        video_path=args.video,
+        output_dir=args.output_dir,
+        video_config=video_config,
+        multimodal_config=multimodal_config,
+        generate_plot=not args.no_plot,
+    )
+
+    print("\nMultimodal Analysis Complete:")
+    print(f"  Detected Candidates: {res['candidate_count']}")
+    print(f"  Signal Audit CSV:    {res['audit_csv']}")
+    print(f"  Candidates CSV:      {res['candidates_csv']}")
+    if res["diagnostic_plot"]:
+        print(f"  Diagnostic Plot:     {res['diagnostic_plot']}")
+
+    if res["candidates"]:
+        print("\nDetected Candidate Jump Scares:")
+        print("  Index | Timestamp | Fused Score | Audio Score | Video Score | Sync Score")
+        print("  ------+-----------+-------------+-------------+-------------+-----------")
+        for i, c in enumerate(res["candidates"], start=1):
+            ts = c["timestamp"]
+            mins = int(ts // 60)
+            secs = ts % 60
+            print(
+                f"  {i:5d} | {mins:02d}:{secs:05.2f}  | {c['score']:11.2f} | "
+                f"{c['audio_score']:11.2f} | {c['video_score']:11.2f} | {c['sync_score']:10.2f}"
+            )
+    print("")
+
+
 def main() -> None:
     """Entry point for jumpscare-detector CLI."""
     parser = argparse.ArgumentParser(
         prog="jumpscare-detector",
-        description="Physics-based acoustic jumpscare detector and benchmark tool.",
+        description="Physics-based acoustic and multimodal jumpscare detector.",
     )
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
@@ -219,6 +268,17 @@ def main() -> None:
     p_analyze.add_argument("--export-json", type=str, default=None, help="Export events to JSON file.")
     p_analyze.add_argument("--export-srt", type=str, default=None, help="Export warning track to SRT file.")
     p_analyze.set_defaults(func=cmd_analyze)
+
+    # Multimodal subcommand
+    p_multi = subparsers.add_parser("multimodal", help="Explainable multimodal jump scare detection.")
+    p_multi.add_argument("input", type=str, help="Path to input media file.")
+    p_multi.add_argument("--video", type=str, default=None, help="Optional separate video track file.")
+    p_multi.add_argument("--output-dir", type=str, default="output", help="Directory for CSV and plot exports.")
+    p_multi.add_argument("--threshold", type=float, default=2.2, help="Detection threshold T (default: 2.2).")
+    p_multi.add_argument("--min-separation", type=float, default=1.0, help="Minimum separation in seconds (default: 1.0).")
+    p_multi.add_argument("--scale-factor", type=float, default=0.5, help="Video downscaling scale factor (default: 0.5).")
+    p_multi.add_argument("--no-plot", action="store_true", help="Skip PNG diagnostic plot generation.")
+    p_multi.set_defaults(func=cmd_multimodal)
 
     # Evaluate against timestamps subcommand
     p_eval = subparsers.add_parser("evaluate-timestamps", help="Evaluate detections against ground truth timestamps.")
