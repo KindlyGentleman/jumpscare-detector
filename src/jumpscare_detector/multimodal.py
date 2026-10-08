@@ -120,15 +120,31 @@ def compute_audio_visual_synchrony(
     n_pts = len(timestamps)
     s_sync = np.zeros(n_pts, dtype=np.float64)
 
-    # Find prominent peaks in each modality
-    audio_peaks, _ = find_peaks(s_audio, height=1.0, distance=3)
-    video_peaks, _ = find_peaks(s_video, height=1.0, distance=3)
+    if n_pts < 3:
+        return s_sync
 
-    audio_peak_times = timestamps[audio_peaks] if len(audio_peaks) > 0 else np.array([])
-    video_peak_times = timestamps[video_peaks] if len(video_peaks) > 0 else np.array([])
+    # Mean-center for Hilbert transform
+    sa_c = s_audio - np.mean(s_audio)
+    sv_c = s_video - np.mean(s_video)
+
+    from scipy.signal import hilbert
+    
+    # Extract instantaneous phase using analytic signal
+    phase_a = np.angle(hilbert(sa_c))
+    phase_v = np.angle(hilbert(sv_c))
+    
+    phase_diff = phase_a - phase_v
+    complex_diff = np.exp(1j * phase_diff)
+    
+    # Compute rolling PLV (e.g. 11 frames = ~0.5s window at 20fps)
+    # Using max_window as duration of the convolution kernel
+    dt_avg = np.mean(np.diff(timestamps)) if n_pts > 1 else 0.05
+    window_size = max(3, int(max_window / dt_avg) | 1) # Ensure odd integer
+    
+    kernel = np.ones(window_size) / window_size
+    plv = np.abs(np.convolve(complex_diff, kernel, mode='same'))
 
     for i in range(n_pts):
-        t = timestamps[i]
         sa = s_audio[i]
         sv = s_video[i]
 
@@ -140,21 +156,8 @@ def compute_audio_visual_synchrony(
         # Magnitude symmetry factor in [0.0, 1.0]
         balance = 2.0 * min(sa, sv) / (sa + sv + 1e-6)
 
-        # Time difference to nearest opposing peak
-        dt = 0.0
-        if len(audio_peak_times) > 0 and len(video_peak_times) > 0:
-            nearest_a = float(np.min(np.abs(audio_peak_times - t)))
-            nearest_v = float(np.min(np.abs(video_peak_times - t)))
-            dt = abs(nearest_a - nearest_v)
-        else:
-            dt = 0.0
-
-        if dt > max_window:
-            gaussian_coincidence = 0.0
-        else:
-            gaussian_coincidence = np.exp(-(dt**2) / (2.0 * sigma**2))
-
-        s_sync[i] = balance * gaussian_coincidence
+        # Non-linear dynamic entrainment score
+        s_sync[i] = balance * plv[i]
 
     return s_sync
 
@@ -212,6 +215,7 @@ def fuse_multimodal_timeline(
             "time_to_contact_tau",
             "flow_residual_mean",
             "flow_residual_p95",
+            "phase_motion_score",
         ]:
             if col in df_video.columns:
                 out[col] = np.interp(timestamps, v_times, df_video[col].values)
