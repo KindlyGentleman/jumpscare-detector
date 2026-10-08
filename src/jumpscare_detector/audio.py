@@ -67,6 +67,7 @@ class AudioPhysicsFeatures:
     crest_factor: np.ndarray
     shock_score: np.ndarray
     tkeo_peak: np.ndarray
+    roughness_score: np.ndarray
 
 
 @dataclass
@@ -84,6 +85,7 @@ class AudioShockEvent:
     speech_confidence: float
     crest_factor: float
     tkeo_peak: float
+    roughness_score: float
     severity: str
 
 
@@ -188,6 +190,7 @@ class AudioPhysicsDetector:
                 crest_factor=empty,
                 shock_score=empty,
                 tkeo_peak=empty,
+                roughness_score=empty,
             )
 
         num_frames = 1 + (num_samples - self.frame_length) // self.hop_length
@@ -222,6 +225,7 @@ class AudioPhysicsDetector:
                 crest_factor=np.ones(num_frames, dtype=np.float64),
                 shock_score=zero_arr,
                 tkeo_peak=zero_arr,
+                roughness_score=zero_arr,
             )
 
         # Crest factor: peak amplitude divided by RMS (impulsiveness metric)
@@ -347,6 +351,10 @@ class AudioPhysicsDetector:
         shock_score = raw_score * (1.0 - speech_penalty)
         shock_score *= (rms >= self.config.min_peak_rms).astype(np.float64)
 
+        from jumpscare_detector.audio_transient import compute_psychoacoustic_roughness
+        # Calculate psychoacoustic roughness
+        roughness_score = compute_psychoacoustic_roughness(audio, self.sample_rate, self.hop_length)
+
         return AudioPhysicsFeatures(
             timestamps=timestamps,
             rms_energy=rms,
@@ -362,6 +370,7 @@ class AudioPhysicsDetector:
             crest_factor=crest_factor,
             shock_score=shock_score,
             tkeo_peak=tkeo_peak,
+            roughness_score=roughness_score,
         )
 
     def _determine_severity(self, score: float, contrast_db: float) -> str:
@@ -435,6 +444,7 @@ class AudioPhysicsDetector:
                         speech_confidence=float(features.speech_confidence[peak_idx]),
                         crest_factor=float(features.crest_factor[peak_idx]),
                         tkeo_peak=float(features.tkeo_peak[peak_idx]),
+                        roughness_score=float(features.roughness_score[peak_idx]),
                         severity=self._determine_severity(peak_score, peak_contrast),
                     )
                 )

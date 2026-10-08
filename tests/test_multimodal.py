@@ -32,6 +32,8 @@ def _generate_synthetic_audio_df(n_points: int = 100, dt: float = 0.05) -> pd.Da
         "crest_factor": np.full(n_points, 2.0),
         "kurtosis": np.full(n_points, 0.0),
         "clipping_ratio": np.full(n_points, 0.0),
+        "tkeo_peak": np.full(n_points, 0.0),
+        "roughness_score": np.full(n_points, 0.0),
     }
     return pd.DataFrame(data)
 

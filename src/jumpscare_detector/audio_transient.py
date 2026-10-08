@@ -75,6 +75,56 @@ def compute_tkeo(x: np.ndarray) -> np.ndarray:
     return np.maximum(0.0, tkeo)
 
 
+def compute_psychoacoustic_roughness(y: np.ndarray, sr: int, target_hop: int) -> np.ndarray:
+    """Compute Psychoacoustic Roughness (Sensory Dissonance).
+    
+    Extracts amplitude modulation depth within 30-150 Hz across Mel bands,
+    which strongly correlates with the biological perception of harshness
+    found in screams or mechanical tearing.
+    """
+    mod_hop = max(32, sr // 344) # roughly ~344 Hz frame rate
+    frame_rate = sr / mod_hop
+    
+    # Use short window to preserve fast amplitude modulations (150Hz = ~6.6ms period)
+    n_fft_roughness = 256
+    S = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft_roughness, hop_length=mod_hop, n_mels=32)
+    
+    nyq = frame_rate / 2.0
+    low = 30.0 / nyq
+    high = 150.0 / nyq
+    high = min(high, 0.99)
+    if low >= high:
+        return np.zeros(int(np.ceil(len(y) / target_hop)))
+        
+    b, a = butter(2, [low, high], btype='band')
+    roughness = np.zeros(S.shape[1])
+    global_max = float(np.max(S)) + 1e-9
+    
+    for i in range(S.shape[0]):
+        band_env = S[i, :]
+        if np.mean(band_env) < 0.01 * global_max:
+            continue
+            
+        mod = filtfilt(b, a, band_env)
+        smooth_env = np.convolve(band_env, np.ones(10)/10, mode='same')
+        local_depth = np.abs(mod) / (smooth_env + 0.01 * global_max)
+        
+        # Weight by relative energy in this band
+        roughness += local_depth * (band_env / global_max)
+        
+    smooth_frames = max(1, int(0.05 * frame_rate))
+    window = np.ones(smooth_frames) / smooth_frames
+    roughness = np.convolve(roughness, window, mode='same')
+    
+    # Resample to match the main feature hop_length
+    target_frames = 1 + len(y) // target_hop
+    orig_times = librosa.frames_to_time(np.arange(len(roughness)), sr=sr, hop_length=mod_hop)
+    target_times = librosa.frames_to_time(np.arange(target_frames), sr=sr, hop_length=target_hop)
+    
+    roughness_resampled = np.interp(target_times, orig_times, roughness)
+    return roughness_resampled
+
+
 def compute_audio_transients(
     audio_input: Union[str, Path, np.ndarray],
     sample_rate: Optional[int] = None,
@@ -241,6 +291,9 @@ def compute_audio_transients(
         source_t = np.linspace(0.0, times[-1], len(val_arr))
         return np.interp(times, source_t, val_arr)
 
+    # 9. Psychoacoustic Roughness (30-150Hz Modulation)
+    roughness = compute_psychoacoustic_roughness(y, sr, hop)
+
     df_data: Dict[str, np.ndarray] = {
         "time": times,
         "timestamp": times,
@@ -268,6 +321,7 @@ def compute_audio_transients(
         "peak_to_baseline_db": peak_to_baseline_db,
         "rise_score": rise_score,
         "tkeo_peak": tkeo_peak,
+        "roughness_score": fit_length(roughness),
     }
 
     return pd.DataFrame(df_data), sr

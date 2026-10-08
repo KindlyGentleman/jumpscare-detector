@@ -55,15 +55,21 @@ def compute_audio_modality_score(
     z_attack = robust_zscore(df_audio["attack_slope"].values, min_scale=0.1)
     z_crest = robust_zscore(df_audio["crest_factor"].values, min_scale=0.5)
     z_kurt = robust_zscore(df_audio["kurtosis"].values, min_scale=1.0)
+    
+    # Physics Phase 1 & 3 Advanced Metrics
+    z_tkeo = robust_zscore(df_audio["tkeo_peak"].values, min_scale=0.01)
+    z_rough = robust_zscore(df_audio.get("roughness_score", np.zeros_like(z_rms)).values, min_scale=0.05)
 
     raw_sa = (
-        0.25 * z_rms
-        + 0.20 * z_rise
-        + 0.20 * z_flux
-        + 0.15 * z_onset
+        0.20 * z_rms
+        + 0.15 * z_rise
+        + 0.15 * z_flux
+        + 0.10 * z_onset
         + 0.10 * z_attack
         + 0.05 * z_crest
         + 0.05 * z_kurt
+        + 0.10 * z_tkeo
+        + 0.10 * z_rough
     )
     # Attenuate sub-audible room tone and digital silence
     audibility = np.clip((df_audio["rms_db"].values - min_audible_db) / 10.0, 0.0, 1.0)
