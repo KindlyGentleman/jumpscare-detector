@@ -13,13 +13,13 @@ from jumpscare_detector.audio_transient import robust_zscore
 class MultimodalConfig:
     """Parameters for multimodal fusion, gating, and event peak picking."""
 
-    weight_audio: float = 0.40
-    weight_video: float = 0.30
+    weight_audio: float = 0.45
+    weight_video: float = 0.25
     weight_contrast: float = 0.10
     weight_sync: float = 0.20
-    gate_audio_threshold: float = 1.2
+    gate_audio_threshold: float = 1.0
     gate_video_threshold: float = 1.2
-    detection_threshold: float = 2.2
+    detection_threshold: float = 1.95
     min_separation: float = 1.0
     sync_sigma: float = 0.25
     sync_max_window: float = 0.50
@@ -123,6 +123,10 @@ def compute_audio_visual_synchrony(
     if n_pts < 3:
         return s_sync
 
+    # Sanitize inputs to prevent NaN propagation through Hilbert/FFT
+    s_audio = np.nan_to_num(s_audio, nan=0.0)
+    s_video = np.nan_to_num(s_video, nan=0.0)
+
     # Mean-center for Hilbert transform
     sa_c = s_audio - np.mean(s_audio)
     sv_c = s_video - np.mean(s_video)
@@ -223,6 +227,11 @@ def fuse_multimodal_timeline(
                 out[col] = 0.0
 
         s_v = compute_video_modality_score(out)
+        
+        # Sanitize any NaNs that might have crept into intermediate signals
+        s_a = np.nan_to_num(s_a, nan=0.0)
+        s_v = np.nan_to_num(s_v, nan=0.0)
+
         out["video_score"] = s_v
 
         s_sync = compute_audio_visual_synchrony(
@@ -239,12 +248,21 @@ def fuse_multimodal_timeline(
         out["contrast_score"] = s_contrast
 
         # Activity gate
-        gate = (s_a > config.gate_audio_threshold) | (s_v > config.gate_video_threshold)
+        # Activity gate: Require at least some audio (a jumpscare without audio is extremely rare)
+        # and don't let extreme camera pans (high video) trigger without audio support.
+        gate = (s_a > config.gate_audio_threshold) | ((s_a > 0.8) & (s_v > config.gate_video_threshold))
+        
+        # Soft-clip extreme unimodal outliers to prevent them from dominating the linear sum
+        s_a_clipped = np.clip(s_a, 0.0, 6.0)
+        s_v_clipped = np.clip(s_v, 0.0, 4.0)
+        
         raw_fused = (
-            config.weight_audio * s_a
-            + config.weight_video * s_v
+            config.weight_audio * s_a_clipped
+            + config.weight_video * s_v_clipped
             + config.weight_contrast * s_contrast
             + config.weight_sync * s_sync
+            # Add a non-linear interaction term to reward simultaneous audio-visual events
+            + 0.10 * np.sqrt(s_a_clipped * s_v_clipped)
         )
         out["fused_score"] = np.where(gate, raw_fused, 0.0)
 
