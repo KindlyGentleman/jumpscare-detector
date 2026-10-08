@@ -58,7 +58,8 @@ def compute_audio_modality_score(
     
     # Physics Phase 1 & 3 Advanced Metrics
     z_tkeo = robust_zscore(df_audio["tkeo_peak"].values, min_scale=0.01)
-    z_rough = robust_zscore(df_audio.get("roughness_score", np.zeros_like(z_rms)).values, min_scale=0.05)
+    rough_vals = df_audio["roughness_score"].values if "roughness_score" in df_audio else np.zeros_like(z_rms)
+    z_rough = robust_zscore(rough_vals, min_scale=0.05)
 
     raw_sa = (
         0.20 * z_rms
@@ -90,15 +91,20 @@ def compute_video_modality_score(df_video: pd.DataFrame) -> np.ndarray:
     inv_tau = 1.0 / (df_video["time_to_contact_tau"].values + 1e-3)
     z_tau = robust_zscore(inv_tau, min_scale=0.01)
 
+    # Phase 4 Phase-Based Motion
+    phase_vals = df_video["phase_motion_score"].values if "phase_motion_score" in df_video else np.zeros_like(z_diff)
+    z_phase = robust_zscore(phase_vals, min_scale=0.01)
+
     s_v = (
-        0.25 * z_diff
+        0.20 * z_diff
         + 0.15 * z_diff95
         + 0.15 * z_lum
         + 0.10 * z_hist
-        + 0.20 * z_flow
+        + 0.15 * z_flow
         + 0.05 * z_flow95
         + 0.05 * z_area
         + 0.05 * z_tau
+        + 0.10 * z_phase
     )
     return s_v
 

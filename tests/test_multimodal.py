@@ -55,6 +55,7 @@ def _generate_synthetic_video_df(n_points: int = 100, dt: float = 0.05) -> pd.Da
         "radial_expansion": np.full(n_points, 0.0),
         "flow_residual_mean": np.full(n_points, 0.1),
         "flow_residual_p95": np.full(n_points, 0.2),
+        "phase_motion_score": np.full(n_points, 0.05),
     }
     return pd.DataFrame(data)
 

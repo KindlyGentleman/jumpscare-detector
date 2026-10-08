@@ -44,6 +44,7 @@ class VideoFrameMetrics:
     time_to_contact_tau: float
     flow_residual_mean: float
     flow_residual_p95: float
+    phase_motion_score: float
 
 
 def compute_frame_difference_features(
@@ -191,6 +192,60 @@ def compute_residual_flow(flow: np.ndarray) -> Tuple[float, float]:
     return mean_res, p95_res
 
 
+_PHASE_FILTERS_CACHE = {}
+
+def compute_phase_based_motion(prev_gray: np.ndarray, curr_gray: np.ndarray) -> float:
+    """Compute illumination-invariant structural motion using Riesz transform phase difference.
+    
+    This function isolates true structural displacement (motion) from 
+    pure illumination changes (flickering lights, strobe) which corrupt standard optical flow.
+    """
+    target_size = (128, 128)
+    
+    if target_size not in _PHASE_FILTERS_CACHE:
+        rows, cols = target_size
+        u = np.fft.fftfreq(cols)
+        v = np.fft.fftfreq(rows)
+        U, V = np.meshgrid(u, v)
+        
+        radius = np.sqrt(U**2 + V**2)
+        radius[0, 0] = 1e-9
+        
+        f0 = 0.1
+        sigma = 0.5
+        bandpass = np.exp(- (np.log(radius / f0)**2) / (2 * np.log(sigma)**2))
+        bandpass[0, 0] = 0
+        
+        R_u = 1j * U / radius
+        R_v = 1j * V / radius
+        
+        _PHASE_FILTERS_CACHE[target_size] = (R_u, R_v, bandpass)
+        
+    R_u, R_v, bandpass = _PHASE_FILTERS_CACHE[target_size]
+    
+    prev_small = cv2.resize(prev_gray, target_size, interpolation=cv2.INTER_AREA)
+    curr_small = cv2.resize(curr_gray, target_size, interpolation=cv2.INTER_AREA)
+
+    def compute_local_phase(img):
+        F = np.fft.fft2(img.astype(np.float32))
+        F_bp = F * bandpass
+        
+        r_x = np.fft.ifft2(F_bp * R_u).real
+        r_y = np.fft.ifft2(F_bp * R_v).real
+        r_mag = np.sqrt(r_x**2 + r_y**2)
+        
+        i_bp = np.fft.ifft2(F_bp).real
+        
+        return np.arctan2(r_mag, i_bp)
+
+    phase_prev = compute_local_phase(prev_small)
+    phase_curr = compute_local_phase(curr_small)
+    
+    phase_diff = np.angle(np.exp(1j * (phase_curr - phase_prev)))
+    
+    return float(np.percentile(np.abs(phase_diff), 95))
+
+
 def process_frame_pair(
     prev_gray: np.ndarray,
     curr_gray: np.ndarray,
@@ -216,6 +271,8 @@ def process_frame_pair(
     radial_exp = compute_radial_expansion(flow, flow_mag, flow_threshold=config.flow_threshold)
     tau = compute_time_to_contact_tau(flow, flow_mag, flow_threshold=config.flow_threshold)
     flow_res_mean, flow_res_p95 = compute_residual_flow(flow)
+    
+    phase_motion = compute_phase_based_motion(prev_gray, curr_gray)
 
     return VideoFrameMetrics(
         timestamp=timestamp,
@@ -233,6 +290,7 @@ def process_frame_pair(
         time_to_contact_tau=tau,
         flow_residual_mean=flow_res_mean,
         flow_residual_p95=flow_res_p95,
+        phase_motion_score=phase_motion,
     )
 
 
@@ -265,6 +323,7 @@ def analyze_video_frames(
             time_to_contact_tau=99.0,
             flow_residual_mean=0.0,
             flow_residual_p95=0.0,
+            phase_motion_score=0.0,
         )
     )
 
