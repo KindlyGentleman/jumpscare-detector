@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 import numpy as np
 from scipy.ndimage import maximum_filter1d
+from scipy.signal import butter, filtfilt
+from jumpscare_detector.audio_transient import compute_tkeo
 
 
 def compute_a_weighting(frequencies: np.ndarray) -> np.ndarray:
@@ -64,6 +66,7 @@ class AudioPhysicsFeatures:
     high_freq_ratio: np.ndarray
     crest_factor: np.ndarray
     shock_score: np.ndarray
+    tkeo_peak: np.ndarray
 
 
 @dataclass
@@ -80,6 +83,7 @@ class AudioShockEvent:
     pitch_periodicity: float
     speech_confidence: float
     crest_factor: float
+    tkeo_peak: float
     severity: str
 
 
@@ -183,6 +187,7 @@ class AudioPhysicsDetector:
                 high_freq_ratio=empty,
                 crest_factor=empty,
                 shock_score=empty,
+                tkeo_peak=empty,
             )
 
         num_frames = 1 + (num_samples - self.frame_length) // self.hop_length
@@ -216,11 +221,20 @@ class AudioPhysicsDetector:
                 high_freq_ratio=zero_arr,
                 crest_factor=np.ones(num_frames, dtype=np.float64),
                 shock_score=zero_arr,
+                tkeo_peak=zero_arr,
             )
 
         # Crest factor: peak amplitude divided by RMS (impulsiveness metric)
         peak_amp = np.max(np.abs(frames), axis=1)
         crest_factor = peak_amp / (rms + eps)
+
+        # Teager-Kaiser Energy Operator (TKEO)
+        nyq = 0.5 * self.sample_rate
+        b, a = butter(2, min(8000.0, nyq * 0.95) / nyq, btype='low')
+        audio_tkeo_filt = filtfilt(b, a, audio)
+        tkeo_signal = compute_tkeo(audio_tkeo_filt)
+        tkeo_frames = np.lib.stride_tricks.as_strided(tkeo_signal, shape=shape, strides=strides)
+        tkeo_peak = np.max(tkeo_frames, axis=1)
 
         # Linear acoustic jerk in s^-1: rate of rise in sound energy dE/dt
         linear_jerk = np.zeros(num_frames, dtype=np.float64)
@@ -347,6 +361,7 @@ class AudioPhysicsDetector:
             high_freq_ratio=high_freq_ratio,
             crest_factor=crest_factor,
             shock_score=shock_score,
+            tkeo_peak=tkeo_peak,
         )
 
     def _determine_severity(self, score: float, contrast_db: float) -> str:
@@ -419,6 +434,7 @@ class AudioPhysicsDetector:
                         pitch_periodicity=float(features.pitch_periodicity[peak_idx]),
                         speech_confidence=float(features.speech_confidence[peak_idx]),
                         crest_factor=float(features.crest_factor[peak_idx]),
+                        tkeo_peak=float(features.tkeo_peak[peak_idx]),
                         severity=self._determine_severity(peak_score, peak_contrast),
                     )
                 )

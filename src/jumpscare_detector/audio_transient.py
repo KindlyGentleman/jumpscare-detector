@@ -8,7 +8,7 @@ import librosa
 import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter1d
-from scipy.signal import hilbert
+from scipy.signal import hilbert, butter, filtfilt
 from scipy.stats import kurtosis
 
 
@@ -60,6 +60,19 @@ def safe_smooth(x: np.ndarray, sigma: float = 2.0) -> np.ndarray:
     if len(x_arr) < 5:
         return x_arr
     return gaussian_filter1d(x_arr, sigma=sigma, mode="nearest")
+
+
+def compute_tkeo(x: np.ndarray) -> np.ndarray:
+    """Compute Teager-Kaiser Energy Operator: Psi(x[n]) = x^2[n] - x[n-1]*x[n+1]."""
+    x_arr = np.asarray(x, dtype=np.float64)
+    if len(x_arr) < 3:
+        return np.zeros_like(x_arr)
+    
+    tkeo = np.zeros_like(x_arr)
+    tkeo[1:-1] = x_arr[1:-1]**2 - x_arr[:-2] * x_arr[2:]
+    tkeo[0] = tkeo[1]
+    tkeo[-1] = tkeo[-2]
+    return np.maximum(0.0, tkeo)
 
 
 def compute_audio_transients(
@@ -153,6 +166,13 @@ def compute_audio_transients(
     rise_time = np.full(frame_count, np.nan, dtype=np.float64)
     attack_slope = np.zeros(frame_count, dtype=np.float64)
     impulsiveness = np.zeros(frame_count, dtype=np.float64)
+    
+    # 7. Teager-Kaiser Energy Operator (TKEO)
+    nyq = 0.5 * sr
+    b, a = butter(2, min(8000.0, nyq * 0.95) / nyq, btype='low')
+    y_tkeo_filt = filtfilt(b, a, y)
+    tkeo_signal = compute_tkeo(y_tkeo_filt)
+    tkeo_peak = np.zeros(frame_count, dtype=np.float64)
 
     dt_sample = 1.0 / float(sr)
 
@@ -171,6 +191,7 @@ def compute_audio_transients(
         kurtosis_values[k] = float(kurtosis(segment, fisher=True, bias=False))
         clipping_ratio[k] = float(np.mean(seg_abs >= config.clipping_threshold))
         impulsiveness[k] = seg_rms / (float(np.mean(seg_abs)) + eps)
+        tkeo_peak[k] = float(np.max(tkeo_signal[start:stop]))
 
         # Frame envelope slice
         e_start = min(start, len(envelope) - 1)
@@ -246,6 +267,7 @@ def compute_audio_transients(
         "attack_slope": attack_slope,
         "peak_to_baseline_db": peak_to_baseline_db,
         "rise_score": rise_score,
+        "tkeo_peak": tkeo_peak,
     }
 
     return pd.DataFrame(df_data), sr
