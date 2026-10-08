@@ -41,6 +41,7 @@ class VideoFrameMetrics:
     flow_area_ratio: float
     flow_divergence: float
     radial_expansion: float
+    time_to_contact_tau: float
     flow_residual_mean: float
     flow_residual_p95: float
 
@@ -115,6 +116,37 @@ def compute_flow_divergence(flow: np.ndarray) -> float:
     return float(np.mean(divergence))
 
 
+def compute_time_to_contact_tau(
+    flow: np.ndarray,
+    flow_mag: np.ndarray,
+    flow_threshold: float = 2.0,
+) -> float:
+    """Compute Time-To-Contact (Tau) using Ecological Optics theory.
+    
+    Tau is estimated inversely from the local spatial divergence of the optical flow.
+    A smaller Tau indicates an imminent biological startle trigger (looming object).
+    Returns Tau in frames. 99.0 represents infinite/safe distance.
+    """
+    u = flow[..., 0]
+    v = flow[..., 1]
+    
+    du_dx = cv2.Sobel(u, cv2.CV_64F, 1, 0, ksize=3) / 8.0
+    dv_dy = cv2.Sobel(v, cv2.CV_64F, 0, 1, ksize=3) / 8.0
+    divergence = du_dx + dv_dy
+    
+    # We only care about areas where divergence is positive (expanding)
+    motion_mask = (flow_mag > flow_threshold) & (divergence > 0.05)
+    
+    if not np.any(motion_mask):
+        return 99.0
+        
+    # Tau = 2 / divergence (for 2D isotropic expansion)
+    tau_field = 2.0 / divergence[motion_mask]
+    
+    # The 5th percentile represents the most threatening (fastest approaching) large object
+    return float(np.percentile(tau_field, 5))
+
+
 def compute_radial_expansion(
     flow: np.ndarray,
     flow_mag: np.ndarray,
@@ -182,6 +214,7 @@ def process_frame_pair(
 
     flow_div = compute_flow_divergence(flow)
     radial_exp = compute_radial_expansion(flow, flow_mag, flow_threshold=config.flow_threshold)
+    tau = compute_time_to_contact_tau(flow, flow_mag, flow_threshold=config.flow_threshold)
     flow_res_mean, flow_res_p95 = compute_residual_flow(flow)
 
     return VideoFrameMetrics(
@@ -197,6 +230,7 @@ def process_frame_pair(
         flow_area_ratio=flow_area,
         flow_divergence=flow_div,
         radial_expansion=radial_exp,
+        time_to_contact_tau=tau,
         flow_residual_mean=flow_res_mean,
         flow_residual_p95=flow_res_p95,
     )
@@ -228,6 +262,7 @@ def analyze_video_frames(
             flow_area_ratio=0.0,
             flow_divergence=0.0,
             radial_expansion=0.0,
+            time_to_contact_tau=99.0,
             flow_residual_mean=0.0,
             flow_residual_p95=0.0,
         )

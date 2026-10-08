@@ -80,11 +80,9 @@ def compute_video_modality_score(df_video: pd.DataFrame) -> np.ndarray:
     z_flow95 = robust_zscore(df_video["flow_p95"].values, min_scale=1.0)
     z_area = robust_zscore(df_video["flow_area_ratio"].values, min_scale=0.02)
 
-    # Rectify divergence and radial expansion to penalize inward or uniform flow
-    div_pos = np.maximum(0.0, df_video["flow_divergence"].values)
-    rad_pos = np.maximum(0.0, df_video["radial_expansion"].values)
-    z_div = robust_zscore(div_pos, min_scale=0.2)
-    z_rad = robust_zscore(rad_pos, min_scale=0.5)
+    # Inverse Time-To-Contact (Tau) - higher means more imminent collision
+    inv_tau = 1.0 / (df_video["time_to_contact_tau"].values + 1e-3)
+    z_tau = robust_zscore(inv_tau, min_scale=0.01)
 
     s_v = (
         0.25 * z_diff
@@ -94,8 +92,7 @@ def compute_video_modality_score(df_video: pd.DataFrame) -> np.ndarray:
         + 0.20 * z_flow
         + 0.05 * z_flow95
         + 0.05 * z_area
-        + 0.025 * z_div
-        + 0.025 * z_rad
+        + 0.05 * z_tau
     )
     return s_v
 
@@ -200,6 +197,7 @@ def fuse_multimodal_timeline(
             "flow_area_ratio",
             "flow_divergence",
             "radial_expansion",
+            "time_to_contact_tau",
             "flow_residual_mean",
             "flow_residual_p95",
         ]:
@@ -258,6 +256,8 @@ def fuse_multimodal_timeline(
             "radial_expansion",
         ]:
             out[col] = 0.0
+        
+        out["time_to_contact_tau"] = 99.0
 
     return out
 
