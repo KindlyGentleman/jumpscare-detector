@@ -276,13 +276,47 @@ def compute_audio_transients(
             attack_slope[k] = float(np.max(deriv))
 
     # 7. Peak-to-Baseline Contrast in Envelope
+    # Impose a minimum physical noise floor of -36 dBFS so long periods of silence
+    # cannot inflate speech onsets into artificial +50 dB jumpscare contrasts.
+    baseline_floor = 10.0 ** (-36.0 / 20.0)
     peak_baseline = trailing_median(envelope_peak + eps, baseline_frames)
-    peak_to_baseline_db = 20.0 * np.log10((envelope_peak + eps) / (peak_baseline + eps))
+    peak_baseline_clamped = np.maximum(peak_baseline, baseline_floor)
+    peak_to_baseline_db = 20.0 * np.log10((envelope_peak + eps) / (peak_baseline_clamped + eps))
 
     # 8. Dimensionless Rise Score S_rise = max(0, peak_to_baseline_db) / (rise_time + 1ms)
     rise_score = np.zeros_like(rise_time)
     valid_rise = np.isfinite(rise_time) & (rise_time > 0.0)
     rise_score[valid_rise] = np.maximum(0.0, peak_to_baseline_db[valid_rise]) / (rise_time[valid_rise] + 1e-3)
+
+    # 9. Harmonic Voiced Speech Invariant Filter (Pitch Periodicity & Vocal Tract Rejection)
+    # Human vocal fundamental frequency: 80 Hz to 350 Hz
+    pitch_lag_min = max(1, int(sr / 350.0))
+    pitch_lag_max = min(n_fft // 2, int(sr / 80.0))
+    autocorr = np.fft.irfft(power.T, n=n_fft, axis=1)
+    r0 = autocorr[:, 0:1] + eps
+    norm_autocorr = autocorr / r0
+    pitch_periodicity = np.max(norm_autocorr[:, pitch_lag_min : pitch_lag_max], axis=1)
+    pitch_periodicity = np.clip(pitch_periodicity, 0.0, 1.0)
+
+    high_mask_speech = freqs >= 2200.0
+    high_energy = np.sum(power[high_mask_speech, :], axis=0)
+    total_spec_energy = np.sum(power, axis=0) + eps
+    high_freq_ratio = high_energy / total_spec_energy
+
+    # Speech confidence invariant: periodicity, formant centroid < 1950Hz, low flatness, low high-freq
+    s_p = np.clip((pitch_periodicity - 0.45) / 0.25, 0.0, 1.0)
+    s_c = np.clip(1.0 - (centroid - 1200.0) / 800.0, 0.0, 1.0)
+    s_f = np.clip(1.0 - (flatness - 0.005) / 0.020, 0.0, 1.0)
+    s_hf = np.clip(1.0 - (high_freq_ratio - 0.04) / 0.08, 0.0, 1.0)
+    raw_speech = (s_p ** 0.35) * (s_f ** 0.35) * (s_c ** 0.20) * (s_hf ** 0.10)
+
+    dt_hop = hop / float(sr)
+    decay = np.exp(-dt_hop / 0.35)
+    speech_confidence = np.zeros_like(raw_speech)
+    cur_sp = 0.0
+    for i in range(len(raw_speech)):
+        cur_sp = max(raw_speech[i], cur_sp * decay)
+        speech_confidence[i] = cur_sp
 
     def fit_length(values: np.ndarray) -> np.ndarray:
         val_arr = np.asarray(values, dtype=np.float64)
@@ -320,6 +354,8 @@ def compute_audio_transients(
         "attack_slope": attack_slope,
         "peak_to_baseline_db": peak_to_baseline_db,
         "rise_score": rise_score,
+        "pitch_periodicity": fit_length(pitch_periodicity),
+        "speech_confidence": fit_length(speech_confidence),
         "tkeo_peak": tkeo_peak,
         "roughness_score": fit_length(roughness),
     }

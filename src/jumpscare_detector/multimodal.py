@@ -72,9 +72,26 @@ def compute_audio_modality_score(
         + 0.10 * z_tkeo
         + 0.10 * z_rough
     )
+    # Speech Suppression:
+    # Conversational speech (formants < 2000 Hz, pitch periodicity in 80-350 Hz, low high-frequency)
+    # is rejected unless accompanied by colossal explosive energy or screeching terror harmonics.
+    rms_db = df_audio["rms_db"].values
+    centroid_hz = df_audio["spectral_centroid_hz"].values if "spectral_centroid_hz" in df_audio else np.zeros_like(z_rms)
+    speech_conf = df_audio["speech_confidence"].values if "speech_confidence" in df_audio else np.zeros_like(z_rms)
+
+    # Shocks that bypass speech penalty:
+    # Colossal blast: RMS >= -10 dBFS
+    # Terror scream / screech: RMS >= -16 dBFS and spectral centroid >= 2300 Hz
+    is_colossal = rms_db >= -10.0
+    is_scream = (rms_db >= -16.0) & (centroid_hz >= 2300.0)
+    bypass_speech = is_colossal | is_scream
+
+    speech_penalty = np.where(bypass_speech, 0.0, np.clip(speech_conf * 0.85, 0.0, 0.85))
+    sa_penalized = raw_sa * (1.0 - speech_penalty)
+
     # Attenuate sub-audible room tone and digital silence
-    audibility = np.clip((df_audio["rms_db"].values - min_audible_db) / 10.0, 0.0, 1.0)
-    return raw_sa * audibility
+    audibility = np.clip((rms_db - min_audible_db) / 10.0, 0.0, 1.0)
+    return sa_penalized * audibility
 
 
 def compute_video_modality_score(df_video: pd.DataFrame) -> np.ndarray:
@@ -247,10 +264,20 @@ def fuse_multimodal_timeline(
         s_contrast = compute_temporal_contrast_score(s_combined, timestamps)
         out["contrast_score"] = s_contrast
 
-        # Activity gate
-        # Activity gate: Require at least some audio (a jumpscare without audio is extremely rare)
-        # and don't let extreme camera pans (high video) trigger without audio support.
-        gate = (s_a > config.gate_audio_threshold) | ((s_a > 0.8) & (s_v > config.gate_video_threshold))
+        # Activity gate: Require either joint audio-visual activation or a colossal non-speech blast.
+        # This prevents:
+        # (1) Long silence followed by normal speech from triggering (no visual shock and speech suppressed).
+        # (2) Rapid camera rotation from triggering (no audio shock).
+        rms_db = df_audio["rms_db"].values
+        speech_conf = df_audio["speech_confidence"].values if "speech_confidence" in df_audio else np.zeros_like(s_a)
+        
+        # Audio-only scare requires loud non-speech explosion/scream:
+        audio_only_qualifies = (s_a > 2.0) & (rms_db >= -14.0) & (speech_conf < 0.40)
+        
+        # Multimodal scare requires simultaneous visual motion and audio presence:
+        multimodal_qualifies = (s_a > 0.8) & (s_v > 0.8)
+        
+        gate = audio_only_qualifies | multimodal_qualifies
         
         # Soft-clip extreme unimodal outliers to prevent them from dominating the linear sum
         s_a_clipped = np.clip(s_a, 0.0, 6.0)

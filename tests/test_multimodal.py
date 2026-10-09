@@ -176,3 +176,26 @@ def test_audio_only_fallback():
     assert candidates[0].timestamp == pytest.approx(2.50, abs=0.06)
     assert candidates[0].video_score == 0.0
     assert "fused_score" in timeline.columns
+
+
+def test_silence_then_speech_rejected_without_visual_shock():
+    """Prolonged silence followed by conversational speech onset is rejected when video is calm."""
+    df_audio = _generate_synthetic_audio_df(200, dt=0.05)
+    df_video = _generate_synthetic_video_df(200, dt=0.05)
+
+    # Prolonged silence
+    df_audio.loc[:100, "rms_db"] = -55.0
+
+    # Conversational speech onset
+    df_audio.loc[105:, "rms_db"] = -22.0
+    df_audio.loc[105:, "speech_confidence"] = 0.85
+    df_audio.loc[105, "rise_score"] = 5.0
+    df_audio.loc[105, "onset_strength"] = 1.5
+    df_audio.loc[105, "flux_high"] = 0.2
+    df_audio.loc[105, "spectral_centroid_hz"] = 1400.0
+
+    config = MultimodalConfig(detection_threshold=1.95)
+    candidates, timeline = detect_multimodal_jumpscares(df_audio, df_video, config)
+
+    # Conversational speech must not trigger a false positive
+    assert len(candidates) == 0
