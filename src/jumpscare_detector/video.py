@@ -422,8 +422,10 @@ def extract_video_transients(
                         flow_area_ratio=0.0,
                         flow_divergence=0.0,
                         radial_expansion=0.0,
+                        time_to_contact_tau=99.0,
                         flow_residual_mean=0.0,
                         flow_residual_p95=0.0,
+                        phase_motion_score=0.0,
                     )
                 )
             else:
